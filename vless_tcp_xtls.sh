@@ -41,6 +41,7 @@ loggreen "== User  : $(whoami)"
 sleep 2s
 check_release(){
     loggreen "$(date +"%Y-%m-%d %H:%M:%S") ==== 检查系统版本"
+    logcmd "yum install -y wget"
     if [ "$RELEASE" == "centos" ]; then
         systemPackage="yum"
         if  [ "$VERSION" == "6" ] ;then
@@ -53,15 +54,21 @@ check_release(){
         fi
         if [ -f "/etc/selinux/config" ]; then
             CHECK=$(grep SELINUX= /etc/selinux/config | grep -v "#")
-            if [ "$CHECK" != "SELINUX=disabled" ]; then
-                loggreen "$(date +"%Y-%m-%d %H:%M:%S") - SELinux状态非disabled,添加80/443到SELinux rules."
+            if [ "$CHECK" == "SELINUX=enforcing" ]; then
+                loggreen "$(date +"%Y-%m-%d %H:%M:%S") - SELinux状态非disabled,关闭SELinux."
+                setenforce 0
+                sed -i 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/selinux/config
                 #loggreen "SELinux is not disabled, add port 80/443 to SELinux rules."
-                loggreen "==== Install semanage"
-                logcmd "yum install -y policycoreutils-python"
-                semanage port -a -t http_port_t -p tcp 80
-                semanage port -a -t http_port_t -p tcp 443
-                semanage port -a -t http_port_t -p tcp 15777
-                semanage port -a -t http_port_t -p tcp 15778
+                #loggreen "==== Install semanage"
+                #logcmd "yum install -y policycoreutils-python"
+                #semanage port -a -t http_port_t -p tcp 80
+                #semanage port -a -t http_port_t -p tcp 443
+                #semanage port -a -t http_port_t -p tcp 15777
+                #semanage port -a -t http_port_t -p tcp 15778
+            elif [ "$CHECK" == "SELINUX=permissive" ]; then
+                loggreen "$(date +"%Y-%m-%d %H:%M:%S") - SELinux状态非disabled,关闭SELinux."
+                setenforce 0
+                sed -i 's/SELINUX=permissive/SELINUX=disabled/g' /etc/selinux/config
             fi
         fi
         firewall_status=`firewall-cmd --state`
@@ -71,7 +78,15 @@ check_release(){
             firewall-cmd --zone=public --add-port=443/tcp --permanent
             firewall-cmd --reload
         fi
-        logcmd "rpm -Uvh http://nginx.org/packages/centos/7/noarch/RPMS/nginx-release-centos-7-0.el7.ngx.noarch.rpm --force --nodeps"
+        while [ ! -f "nginx-release-centos-7-0.el7.ngx.noarch.rpm" ]
+        do
+            logcmd "wget http://nginx.org/packages/centos/7/noarch/RPMS/nginx-release-centos-7-0.el7.ngx.noarch.rpm"
+            if [ ! -f "nginx-release-centos-7-0.el7.ngx.noarch.rpm" ]; then
+                logred "$(date +"%Y-%m-%d %H:%M:%S") - 下载nginx rpm包失败，继续重试..."
+            fi
+        done
+        logcmd "rpm -ivh nginx-release-centos-7-0.el7.ngx.noarch.rpm --force --nodeps"
+        #logcmd "rpm -Uvh http://nginx.org/packages/centos/7/noarch/RPMS/nginx-release-centos-7-0.el7.ngx.noarch.rpm --force --nodeps"
         #loggreen "Prepare to install nginx."
         #yum install -y libtool perl-core zlib-devel gcc pcre* >/dev/null 2>&1
         logcmd "yum install -y epel-release"
@@ -135,7 +150,7 @@ cat > /etc/nginx/nginx.conf <<-EOF
 user  root;
 worker_processes  1;
 #error_log  /etc/nginx/error.log warn;
-pid    /var/run/nginx.pid;
+#pid    /var/run/nginx.pid;
 events {
     worker_connections  1024;
 }
@@ -179,6 +194,12 @@ server {
 EOF
     loggreen "$(date +"%Y-%m-%d %H:%M:%S") ==== 检测nginx配置文件"
     logcmd "nginx -t"
+    #CHECK=$(grep SELINUX= /etc/selinux/config | grep -v "#")
+    #if [ "$CHECK" != "SELINUX=disabled" ]; then
+    #    loggreen "设置Selinux允许nginx"
+    #    cat /var/log/audit/audit.log | grep nginx | grep denied | audit2allow -M mynginx  
+    #    semodule -i mynginx.pp 
+    #fi
     systemctl enable nginx.service
     systemctl restart nginx.service
     loggreen "$(date +"%Y-%m-%d %H:%M:%S") - 使用acme.sh申请https证书."
@@ -387,6 +408,7 @@ remove_v2ray(){
         find / | grep nginx | sudo xargs rm -rf
     fi
     rm -rf /usr/local/share/v2ray/ /usr/local/etc/v2ray/
+    rm -f /usr/local/bin/v2ray /usr/local/bin/v2ctl 
     rm -rf /etc/systemd/system/v2ray*
     rm -rf /etc/nginx
     rm -rf /usr/share/nginx/html/*
